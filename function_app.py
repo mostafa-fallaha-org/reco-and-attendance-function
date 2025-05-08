@@ -50,12 +50,9 @@ def handleAttendance(
     with FaceAdministrationClient(endpoint=ENDPOINT, credential=AzureKeyCredential(KEY)) as face_admin_client, \
         FaceClient(endpoint=ENDPOINT, credential=AzureKeyCredential(KEY)) as face_client:
 
-        logging.info(f"time: {datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S')}")
-        rows = list(map(lambda r: json.loads(r.to_json()), schedule))
+        schedules = list(map(lambda r: json.loads(r.to_json()), schedule))
 
-        logging.info(f"rows {rows}")
-
-        if not rows:
+        if not schedules:
             return func.HttpResponse("No schedules now", status_code=200)
 
         # Detect faces
@@ -70,22 +67,20 @@ def handleAttendance(
             return_face_attributes=[FaceAttributeTypeRecognition04.QUALITY_FOR_RECOGNITION],
         )
         for face in faces:
-            # Putting the QualityForRecognition to LOW since the image is coming from an ESP32-CAM.
+            # Only take the face if it is of sufficient quality.
             if face.face_attributes.quality_for_recognition != QualityForRecognition.LOW:
                 face_ids.append(face.face_id)
+            else:
+                return func.HttpResponse("Image quality not sufficient", status_code=400)
 
         # Identify faces
         identify_results = face_client.identify_from_large_person_group(
             face_ids=face_ids,
             large_person_group_id=LARGE_PERSON_GROUP_ID,
         )
-        logging.info(f"Identifying faces in image")
+
         for identify_result in identify_results:
             if identify_result.candidates:
-                logging.info(f"Person is identified for face ID {identify_result.face_id} in image, with a confidence of "
-                    f"{identify_result.candidates[0].confidence}.")  # Get topmost confidence score
-                
-                logging.info(f"candidates: {identify_result.candidates[0].person_id}")
 
                 # Verify faces
                 verify_result = face_client.verify_from_large_person_group(
@@ -100,22 +95,20 @@ def handleAttendance(
                     person_id=identify_result.candidates[0].person_id
                 )
 
-                logging.info(f"Person: {person.name}")
+                schedule_data = dict(schedules[0])
 
-                r2 = dict(rows[0])
-
-                logging.info(f"rows: {r2['id']}, course_code: {r2['course_code']}")
+                logging.info(f"id: {schedule_data['id']}, course_code: {schedule_data['course_code']}")
 
                 AttendanceTable.set(
                     func.SqlRow({
-                        "schedule_id": r2['id'],
+                        "schedule_id": schedule_data['id'],
                         "student_id": person.name,
-                        "course_code": r2['course_code'],
+                        "course_code": schedule_data['course_code'],
                         "arrival_time": datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S')
                     })
                 )
                     
-                logging.info(f"{person.name} save to db")
+                logging.info(f"Srudent with the Id = {person.name} saved to the Attendance table")
 
                 payload = {
                     "verification_result": verify_result.is_identical,
