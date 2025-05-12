@@ -118,7 +118,7 @@ def handleAttendance(
                     SELECT *
                     FROM dbo.Attendance
                     WHERE schedule_id = %s
-                    AND student_id <= %s
+                    AND student_id = %s
                     """,
                     (schedules[0][0], person.name)
                 )
