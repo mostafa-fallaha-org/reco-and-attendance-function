@@ -68,7 +68,7 @@ def handleAttendance(
     schedules = cursor.fetchall()
 
     if not schedules:
-        return func.HttpResponse("No Schedules Now", status_code=200)
+        return func.HttpResponse("No Schedules Now", status_code=400)
 
     with FaceAdministrationClient(endpoint=ENDPOINT, credential=AzureKeyCredential(KEY)) as face_admin_client, \
         FaceClient(endpoint=ENDPOINT, credential=AzureKeyCredential(KEY)) as face_client:
@@ -126,7 +126,7 @@ def handleAttendance(
                 student_exist = cursor.fetchall()
 
                 if student_exist:
-                    return func.HttpResponse(f"Attendance for student {person.name} already taken for the schedule {schedules[0][0]}", status_code=200)
+                    return func.HttpResponse(f"Attendance for student {person.name} already taken for the schedule {schedules[0][0]}", status_code=400)
                 else:
                     AttendanceTable.set(
                         func.SqlRow({
