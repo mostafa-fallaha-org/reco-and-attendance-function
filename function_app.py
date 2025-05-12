@@ -3,17 +3,32 @@ from azure.functions.decorators.core import DataType
 import logging, os
 import json
 from datetime import datetime, UTC
-from azure.storage.blob import BlobServiceClient
 from azure.core.credentials import AzureKeyCredential
 from azure.ai.vision.face import FaceAdministrationClient, FaceClient
 from azure.ai.vision.face.models import FaceAttributeTypeRecognition04, FaceDetectionModel, FaceRecognitionModel, QualityForRecognition
 from azure.ai.vision.face.models import LargePersonGroupPerson
 import pytz
+import pymssql
 
 # ─── CONFIG from ENV ─────────────────────────────────────────────────────
 KEY = os.getenv("FACE_APIKEY")
 ENDPOINT = os.getenv("FACE_ENDPOINT")
+DB_SERVER = os.getenv("DB_SERVER")
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_NAME = os.getenv("DB_NAME")
+DB_PORT = os.getenv("DB_PORT")
 beirut_tz = pytz.timezone('Asia/Beirut')
+
+conn = pymssql.connect(
+    server=DB_SERVER,
+    user=DB_USER,
+    password=DB_PASSWORD,
+    database=DB_NAME,
+    port=DB_PORT,
+    encryption='require'
+)
+cursor = conn.cursor()
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -25,35 +40,38 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
     data_type=DataType.STRING
 )
 
-@app.sql_input(
-    arg_name="schedule",
-    command_text=f"select [id], [course_code] from dbo.Schedules where class = @class and session_start <= '{datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S')}' and session_end >= '{datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S')}'",
-    command_type="Text",
-    parameters="@class={class}",
-    connection_string_setting="SqlConnectionString"
-)
-
-@app.route(route="handleAttendance/{class}", methods=["POST"])
+@app.route(route="handleAttendance", methods=["POST"])
 def handleAttendance(
     req: func.HttpRequest, 
-    AttendanceTable: func.Out[func.SqlRow],
-    schedule: func.SqlRowList
+    AttendanceTable: func.Out[func.SqlRow]
 ) -> func.HttpResponse:
     logging.info(f"Received image upload request")
     image = req.get_body()
 
+    cur_class = req.params.get('cur_class')
+
     if not image:
         return func.HttpResponse("No image provided", status_code=400)
 
-    LARGE_PERSON_GROUP_ID = str('i4test')
+    LARGE_PERSON_GROUP_ID = str(cur_class.lower())
+
+    cursor.execute(
+        """
+        SELECT id, course_code
+        FROM dbo.Schedules
+        WHERE class = %s
+        AND session_start <= %s
+        AND session_end   >= %s
+        """,
+        (cur_class, datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S'), datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S'))
+    )
+    schedules = cursor.fetchall()
+
+    if not schedules:
+        return func.HttpResponse("No Schedules Now", status_code=200)
 
     with FaceAdministrationClient(endpoint=ENDPOINT, credential=AzureKeyCredential(KEY)) as face_admin_client, \
         FaceClient(endpoint=ENDPOINT, credential=AzureKeyCredential(KEY)) as face_client:
-
-        schedules = list(map(lambda r: json.loads(r.to_json()), schedule))
-
-        if not schedules:
-            return func.HttpResponse("No schedules now", status_code=200)
 
         # Detect faces
         face_ids = []
@@ -95,20 +113,31 @@ def handleAttendance(
                     person_id=identify_result.candidates[0].person_id
                 )
 
-                schedule_data = dict(schedules[0])
-
-                logging.info(f"id: {schedule_data['id']}, course_code: {schedule_data['course_code']}")
-
-                AttendanceTable.set(
-                    func.SqlRow({
-                        "schedule_id": schedule_data['id'],
-                        "student_id": person.name,
-                        "course_code": schedule_data['course_code'],
-                        "arrival_time": datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S')
-                    })
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM dbo.Attendance
+                    WHERE schedule_id = %s
+                    AND student_id <= %s
+                    """,
+                    (schedules[0][0], person.name)
                 )
+
+                student_exist = cursor.fetchall()
+
+                if student_exist:
+                    return func.HttpResponse(f"Attendance for student {person.name} already taken for the schedule {schedules[0][0]}", status_code=200)
+                else:
+                    AttendanceTable.set(
+                        func.SqlRow({
+                            "schedule_id": schedules[0][0],
+                            "student_id": person.name,
+                            "course_code": schedules[0][1],
+                            "arrival_time": datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S')
+                        })
+                    )
                     
-                logging.info(f"Srudent with the Id = {person.name} saved to the Attendance table")
+                logging.info(f"Student with the Id = {person.name} saved to the Attendance table")
 
                 payload = {
                     "verification_result": verify_result.is_identical,

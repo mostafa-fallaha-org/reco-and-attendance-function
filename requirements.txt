@@ -7,3 +7,4 @@ azure-ai-vision-face
 azure-storage-blob
 requests
 pytz
+pymssql
