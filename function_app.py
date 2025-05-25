@@ -46,32 +46,33 @@ def handleAttendance(
     req: func.HttpRequest, 
     AttendanceTable: func.Out[func.SqlRow]
 ) -> func.HttpResponse:
-    logging.info(f"Received image upload request")
-    image = req.get_body()
-
-    cur_class = req.params.get('cur_class')
-
-    if not image:
-        return func.HttpResponse("No image provided", status_code=400)
-
-    LARGE_PERSON_GROUP_ID = str(cur_class.lower())
-
-    cursor.execute(
-        """
-        SELECT id, course_code
-        FROM dbo.Schedules
-        WHERE class = %s
-        AND session_start <= %s
-        AND session_end   >= %s
-        """,
-        (cur_class, datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S'), datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S'))
-    )
-    schedules = cursor.fetchall()
-
-    if not schedules:
-        return func.HttpResponse("No Schedules Now", status_code=400)
-
     try:
+        logging.info(f"Received image upload request")
+        image = req.get_body()
+
+        cur_class = req.params.get('cur_class')
+
+        if not image:
+            return func.HttpResponse("No image provided", status_code=400)
+
+        LARGE_PERSON_GROUP_ID = str(cur_class.lower())
+
+        cursor.execute(
+            """
+            SELECT id, course_code
+            FROM dbo.Schedules
+            WHERE class = %s
+            AND session_start <= %s
+            AND session_end   >= %s
+            """,
+            (cur_class, datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S'), datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S'))
+        )
+        schedules = cursor.fetchall()
+
+        if not schedules:
+            return func.HttpResponse("No Schedules Now", status_code=400)
+
+    
         with FaceAdministrationClient(endpoint=ENDPOINT, credential=AzureKeyCredential(KEY)) as face_admin_client, \
             FaceClient(endpoint=ENDPOINT, credential=AzureKeyCredential(KEY)) as face_client:
 
@@ -165,10 +166,5 @@ def handleAttendance(
                 else:
                     return func.HttpResponse(f"No person identified for face ID {identify_result.face_id} in image.", status_code=400)
     
-    except HttpResponseError as e:
-        error_code = e.error.code if e.error else "UnknownError"
-        error_message = e.error.message if e.error else str(e)
-        return func.HttpResponse(
-            f"Error\nCode: {error_code}\nMessage: {error_message}",
-            status_code=400
-        )
+    except Exception as e:
+        return func.HttpResponse(f"Error: {str(e)}", status_code=400)
