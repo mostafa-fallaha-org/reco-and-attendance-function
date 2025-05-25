@@ -84,6 +84,10 @@ def handleAttendance(
             return_face_id=True,
             return_face_attributes=[FaceAttributeTypeRecognition04.QUALITY_FOR_RECOGNITION],
         )
+
+        if not faces:
+            return func.HttpResponse("No faces in the image", status_code=400)
+        
         for face in faces:
             # Only take the face if it is of sufficient quality.
             if face.face_attributes.quality_for_recognition != QualityForRecognition.LOW:
