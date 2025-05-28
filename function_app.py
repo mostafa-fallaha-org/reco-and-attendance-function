@@ -62,10 +62,9 @@ def handleAttendance(
             SELECT id, course_code
             FROM dbo.Schedules
             WHERE class = %s
-            AND session_start <= %s
-            AND session_end   >= %s
+            AND %s BETWEEN DATEADD(MINUTE, -10, session_start) AND session_end
             """,
-            (cur_class, datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S'), datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S'))
+            (cur_class, datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S'))
         )
         schedules = cursor.fetchall()
 
