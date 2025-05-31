@@ -62,7 +62,7 @@ def handleAttendance(
             SELECT id, course_code
             FROM dbo.Schedules
             WHERE class = %s
-            AND %s BETWEEN DATEADD(MINUTE, -10, session_start) AND session_end
+            AND %s BETWEEN DATEADD(MINUTE, -10, session_start) AND DATEADD(MINUTE, +30, session_start)
             """,
             (cur_class, datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S'))
         )
@@ -95,12 +95,10 @@ def handleAttendance(
             if len(faces) > 1:
                 return func.HttpResponse("Only one face is allowed", status_code=400)
             
-            for face in faces:
-                # Only take the face if it is of sufficient quality.
-                if face.face_attributes.quality_for_recognition != QualityForRecognition.LOW:
-                    face_ids.append(face.face_id)
-                else:
-                    return func.HttpResponse("Image quality not sufficient", status_code=400)
+            if faces[0].face_attributes.quality_for_recognition != QualityForRecognition.LOW:
+                face_ids.append(faces[0].face_id)
+            else:
+                return func.HttpResponse("Image quality not sufficient", status_code=400)
 
             # Identify faces
             identify_results = face_client.identify_from_large_person_group(
@@ -108,62 +106,61 @@ def handleAttendance(
                 large_person_group_id=LARGE_PERSON_GROUP_ID,
             )
 
-            for identify_result in identify_results:
-                if identify_result.candidates:
+            if identify_results[0].candidates:
 
-                    # Verify faces
-                    verify_result = face_client.verify_from_large_person_group(
-                        face_id=identify_result.face_id,
-                        large_person_group_id=LARGE_PERSON_GROUP_ID,
-                        person_id=identify_result.candidates[0].person_id,
-                    )
-                    logging.info(f"verification result: {verify_result.is_identical}. confidence: {verify_result.confidence}")
+                # Verify faces
+                verify_result = face_client.verify_from_large_person_group(
+                    face_id=identify_results[0].face_id,
+                    large_person_group_id=LARGE_PERSON_GROUP_ID,
+                    person_id=identify_results[0].candidates[0].person_id,
+                )
+                logging.info(f"verification result: {verify_result.is_identical}. confidence: {verify_result.confidence}")
 
-                    person: LargePersonGroupPerson = face_admin_client.large_person_group.get_person(
-                        large_person_group_id=LARGE_PERSON_GROUP_ID,
-                        person_id=identify_result.candidates[0].person_id
-                    )
+                person: LargePersonGroupPerson = face_admin_client.large_person_group.get_person(
+                    large_person_group_id=LARGE_PERSON_GROUP_ID,
+                    person_id=identify_results[0].candidates[0].person_id
+                )
 
-                    cursor.execute(
-                        """
-                        SELECT *
-                        FROM dbo.Attendance
-                        WHERE schedule_id = %s
-                        AND student_id = %s
-                        """,
-                        (schedules[0][0], person.name)
-                    )
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM dbo.Attendance
+                    WHERE schedule_id = %s
+                    AND student_id = %s
+                    """,
+                    (schedules[0][0], person.name)
+                )
 
-                    student_exist = cursor.fetchall()
+                student_exist = cursor.fetchall()
 
-                    if student_exist:
-                        return func.HttpResponse(f"Attendance for student {person.name} already taken for the schedule {schedules[0][0]}", status_code=400)
-                    else:
-                        AttendanceTable.set(
-                            func.SqlRow({
-                                "schedule_id": schedules[0][0],
-                                "student_id": person.name,
-                                "course_code": schedules[0][1],
-                                "arrival_time": datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S')
-                            })
-                        )
-                        
-                    logging.info(f"Student with the Id = {person.name} saved to the Attendance table")
-
-                    payload = {
-                        "verification_result": verify_result.is_identical,
-                        "confidence": verify_result.confidence,
-                        "person": person.name
-                    }
-                    
-                    return func.HttpResponse(
-                        body=json.dumps(payload),
-                        status_code=200,
-                        mimetype="application/json"
-                    )
-                
+                if student_exist:
+                    return func.HttpResponse(f"Attendance for student {person.name} already taken for the schedule {schedules[0][0]}", status_code=400)
                 else:
-                    return func.HttpResponse(f"No person identified for face ID {identify_result.face_id} in image.", status_code=400)
+                    AttendanceTable.set(
+                        func.SqlRow({
+                            "schedule_id": schedules[0][0],
+                            "student_id": person.name,
+                            "course_code": schedules[0][1],
+                            "arrival_time": datetime.now(beirut_tz).strftime('%Y-%m-%d %H:%M:%S')
+                        })
+                    )
+                    
+                logging.info(f"Student with the Id = {person.name} saved to the Attendance table")
+
+                payload = {
+                    "verification_result": verify_result.is_identical,
+                    "confidence": verify_result.confidence,
+                    "person": person.name
+                }
+                
+                return func.HttpResponse(
+                    body=json.dumps(payload),
+                    status_code=200,
+                    mimetype="application/json"
+                )
+            
+            else:
+                return func.HttpResponse(f"No person identified for face ID {identify_results[0].face_id} in image.", status_code=400)
     
     except Exception as e:
         return func.HttpResponse(f"Error: {str(e)}", status_code=400)
