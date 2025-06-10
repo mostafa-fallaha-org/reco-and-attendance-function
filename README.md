@@ -1,91 +1,124 @@
-# Schedules Portal
+# Handle Attendance - Azure Function
 
-**Schedules Portal** is a modern university portal web application designed to streamline academic management for both students and instructors. Built with **React**, **TypeScript**, **Vite**, and **Chakra UI**, it delivers a fast, accessible, and visually appealing experience. The portal integrates with **Azure Static Web Apps** and **Azure SQL Database** (via Data API Builder) to provide real-time data and secure authentication.
+This **Azure Function** performs automated student attendance logging using **Azure Face API** for facial recognition. Upon receiving a student's face image, the function:
 
----
-
-## What Does Schedules Portal Do?
-
-Schedules Portal serves as a centralized platform for managing university schedules. It is tailored to the needs of both students and instructors, offering distinct dashboards and workflows for each role.
-
-### Key Features
-
-- 🔐 **Authentication**  
-  Secure login for students and instructors, ensuring personalized access to dashboards and data.
-
-- 🧑‍🎓 **Student Dashboard**  
-  Students can view their class schedules and session details in a clear, organized interface.
-
-- 👨‍🏫 **Instructor Dashboard**  
-  Instructors can manage their teaching schedules, create or delete class sessions, and view all assigned courses.
-
-- 📅 **Schedule Management**  
-  Both students and instructors benefit from up-to-date scheduling, with the ability to see upcoming sessions, class times, and course assignments.
-
-- ☁️ **Cloud Integration**  
-  The app is deployed on Azure Static Web Apps, with seamless integration to Azure SQL Database for persistent, scalable data storage.
-
-- 🔄 **CI/CD with GitHub Actions**  
-  Every push to the `main` branch triggers a GitHub Actions workflow that builds and deploys the app automatically to Azure Static Web Apps.
-
-- 🧪 **Local Development with Azure SWA CLI**  
-  The Azure SWA CLI is used to emulate the full stack locally, allowing developers to test the frontend, APIs, and authentication together before deploying.
-
-- 🎨 **Modern UI**  
-  Chakra UI provides a responsive, accessible, and themeable component library, ensuring a consistent and user-friendly experience.
-
-- ⚡ **Performance**  
-  Powered by Vite, Schedules Portal offers instant hot module reloading and fast build times for a smooth development and user experience.
-
-- 🧹 **Code Quality**  
-  TypeScript and ESLint are used throughout the project to maintain high code quality and reliability.
+1. Verifies if the current time matches any active session.
+2. Detects and identifies the student using the **Face API**.
+3. If identified and verified, logs the student's attendance in the **Azure SQL Database**.
 
 ---
 
-## How It Works
+## 📌 Function Overview
 
-- **Role-Based Access:**  
-  Users log in as either students or instructors. The portal detects the role and presents the appropriate dashboard and features.
-
-- **Data Integration:**  
-  All user, schedule, and course data is managed through Azure SQL Database, accessed securely via Azure Data API Builder.
-
-- **Cloud-Ready Deployment:**  
-  The project is deployed to Azure Static Web Apps with automated GitHub Actions CI/CD pipelines. Local development is streamlined using the Azure SWA CLI, which simulates the cloud environment (frontend, APIs, and auth) on your machine.
-
----
-
-## Technology Stack
-
-- **Frontend:** React, TypeScript, Chakra UI, Vite
-- **Backend/Data:** Azure Static Web Apps, Azure SQL Database, Data API Builder
-- **DevOps:** GitHub Actions (CI/CD), Azure SWA CLI
+- **Trigger Type:** HTTP (anonymous)
+- **Method:** POST
+- **Route:** `/handleAttendance`
+- **Consumes:** Binary image as request body (`image/jpeg` or `image/png`)
+- **Writes to DB:**  
+  - Reads from `dbo.Schedules` and `dbo.Attendance` using direct SQL queries via `pymssql`  
+  - Inserts into `dbo.Attendance` using **SQL output binding**
 
 ---
 
-## Use Cases
+## 🧠 How It Works
 
-- **Students:**
+### 🔄 Workflow
 
-  - Instantly view upcoming classes and session details
+1. **Image Upload & Parameters**
+   - Receives binary image in the body.
+   - Expects `cur_class` as a query parameter (e.g., `CS101`).
 
-- **Instructors:**
-  - Manage and update class schedules
-  - Create or delete sessions as needed
+2. **Active Session Validation**
+   - Queries `dbo.Schedules` to find a class session where the current time falls within ±10 to +30 minutes of `session_start`.
+
+3. **Face Detection & Quality Check**
+   - Uses `FaceClient.detect` to ensure one high-quality face is present.
+
+4. **Identification & Verification**
+   - Identifies the face against the **Azure Face API** Person Group for the given class.
+   - Verifies the face using `verify_from_large_person_group`.
+
+5. **Attendance Logging**
+   - Checks if attendance already exists in `dbo.Attendance`.
+   - If not, inserts a new row via SQL output binding (`@app.generic_output_binding`).
 
 ---
 
-## Project Structure
+## 🧪 Input & Output
 
-The codebase is organized for clarity and scalability, with separate folders for components, services, authentication, and type definitions. Configuration files for Azure deployment, CI/CD via GitHub Actions, and local development with SWA CLI are included.
+### Request
+
+**POST** `/api/handleAttendance?cur_class=CS101`  
+**Headers:** `Content-Type: image/jpeg`  
+**Body:** Binary image
+
+### Response
+
+- `200 OK`: JSON payload with verification result, confidence, and student ID.
+- `400 Bad Request`: For errors like:
+  - No image provided
+  - No class in session
+  - Face not detected or poor quality
+  - Face not recognized
+  - Attendance already logged
 
 ---
 
-## Learn More
+## 🔐 Face API Configuration
 
-- [React Documentation](https://react.dev/)
-- [Chakra UI](https://chakra-ui.com/)
-- [Vite](https://vite.dev/)
-- [Azure Static Web Apps](https://learn.microsoft.com/en-us/azure/static-web-apps/)
-- [Azure SWA CLI](https://azure.github.io/static-web-apps-cli/)
-- [GitHub Actions for SWA](https://learn.microsoft.com/en-us/azure/static-web-apps/github-actions-workflow)
+- **Recognition Model:** `RECOGNITION04`
+- **Detection Model:** `DETECTION03`
+- **Quality Check:** Accepts only `QualityForRecognition.HIGH`
+
+---
+
+## 🗃️ Database Access
+
+### 1. **Direct SQL Access via `pymssql`**
+- Read operations:
+  - `SELECT` from `dbo.Schedules` to find current sessions
+  - `SELECT` from `dbo.Attendance` to check existing entries
+
+### 2. **Write via SQL Output Binding**
+- Insert operation:
+  - Writes new attendance records into `dbo.Attendance` using `@app.generic_output_binding`.
+
+---
+
+## 🧪 Local Development
+
+1. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+2. Setup local.settings.json:
+```json
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "FACE_APIKEY": "<your-api-key>",
+    "FACE_ENDPOINT": "<your-face-api-endpoint>",
+    "DB_SERVER": "<your-db-server>",
+    "DB_USER": "<your-db-username>",
+    "DB_PASSWORD": "<your-db-password>",
+    "DB_NAME": "<your-db-name>",
+    "DB_PORT": "1433",
+    "SqlConnectionString": "Server=...;Initial Catalog=...;User ID=...;Password=...;Encrypt=True;"
+  }
+}
+```
+
+3. Run the function
+```bash
+func start
+```
+
+## Refrences:
+- [Azure Face API](https://learn.microsoft.com/en-us/azure/ai-services/computer-vision/overview-identity)
+- [Azure Functions Python Developer Guide](https://learn.microsoft.com/en-us/azure/azure-functions/create-first-function-vs-code-python)
+- [Azure SQL Output Binding for Azure Functions](https://learn.microsoft.com/en-us/azure/azure-functions/functions-add-output-binding-azure-sql-vs-code?pivots=programming-language-python#update-your-function-app-settings)
+- [pymssql Documentation](https://www.pymssql.org/en/stable/)
